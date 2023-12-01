@@ -1,0 +1,6 @@
+checkpoint/
+job.sh
+mage.egg-info/
+results/
+taming/modules/autoencoder/
+**__pycache__/
