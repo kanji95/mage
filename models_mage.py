@@ -2,6 +2,9 @@ from functools import partial
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import torch.distributed as dist
+import pdb
 
 from timm.models.vision_transformer import PatchEmbed, DropPath, Mlp
 
@@ -12,6 +15,25 @@ from omegaconf import OmegaConf
 import numpy as np
 import scipy.stats as stats
 
+from transformers import AutoTokenizer, T5Model
+
+# class TextEncoder(nn.Module):
+#     def __init__(self, model_type="t5-base", max_length=64):
+#         super(TextEncoder, self).__init__()
+#         # Define your model architecture here
+        
+#         self.max_length = max_length
+        
+#         self.tokenizer = AutoTokenizer.from_pretrained(model_type)
+        
+#         text_model = T5Model.from_pretrained(model_type)
+#         self.text_encoder = text_model.encoder
+
+#     def forward(self, x):
+#         # Define the forward pass of your model here
+#         input_ids = self.tokenizer(x, max_length=self.max_length, truncation=True, padding='max_length', return_tensors="pt").input_ids
+#         x = self.text_encoder(input_ids).last_hidden_state # (batch_size, sequence_length, hidden_size)
+#         return x
 
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
@@ -42,6 +64,28 @@ class Attention(nn.Module):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x, attn
+
+class CrossAttention(nn.Module):
+    def __init__(self, feature_dim):
+        super(CrossAttention, self).__init__()
+        self.scale = feature_dim ** -0.5
+
+    def forward(self, image_features, text_features):
+        # image_features shape: (b, 129, 768)
+        # text_features shape: (b, 64, 768)
+
+        # Calculate attention scores
+        # (b, 129, 768) x (b, 768, 64) -> (b, 129, 64)
+        attention_scores = torch.matmul(image_features, text_features.transpose(-2, -1)) * self.scale
+
+        # Normalize scores to probabilities
+        attention_probs = F.softmax(attention_scores, dim=-1)
+
+        # Weighted sum of text features for each image feature
+        # (b, 129, 64) x (b, 64, 768) -> (b, 129, 768)
+        refined_image_features = torch.matmul(attention_probs, text_features)
+
+        return refined_image_features
 
 
 class Block(nn.Module):
@@ -151,7 +195,7 @@ class MaskedGenerativeEncoderViT(nn.Module):
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
                  mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,
                  mask_ratio_min=0.5, mask_ratio_max=1.0, mask_ratio_mu=0.55, mask_ratio_std=0.25,
-                 vqgan_ckpt_path='vqgan_jax_strongaug.ckpt'):
+                 vqgan_ckpt_path='vqgan_jax_strongaug.ckpt', model_type="t5-base", max_length=64):
         super().__init__()
 
         # --------------------------------------------------------------------------
@@ -179,6 +223,13 @@ class MaskedGenerativeEncoderViT(nn.Module):
                                                     (mask_ratio_max - mask_ratio_mu) / mask_ratio_std,
                                                     loc=mask_ratio_mu, scale=mask_ratio_std)
 
+        self.max_length = max_length
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(model_type)
+        
+        text_model = T5Model.from_pretrained(model_type)
+        self.text_encoder = text_model.encoder
+        
         # --------------------------------------------------------------------------
         # MAGE encoder specifics
         dropout_rate = 0.1
@@ -195,6 +246,9 @@ class MaskedGenerativeEncoderViT(nn.Module):
         self.norm = norm_layer(embed_dim)
         # --------------------------------------------------------------------------
 
+        # Cross Attention
+        self.cross_attention = CrossAttention(embed_dim)
+        
         # --------------------------------------------------------------------------
         # MAGE decoder specifics
         self.decoder_embed = nn.Linear(embed_dim, decoder_embed_dim, bias=True)
@@ -255,7 +309,7 @@ class MaskedGenerativeEncoderViT(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward_encoder(self, x):
+    def forward_encoder(self, x, y):
         # tokenization
         with torch.no_grad():
             z_q, _, token_tuple = self.vqgan.encode(x)
@@ -304,24 +358,38 @@ class MaskedGenerativeEncoderViT(nn.Module):
         input_embeddings_after_drop = input_embeddings[token_keep_mask.nonzero(as_tuple=True)].reshape(bsz, -1, emb_dim)
         # print("Input embedding after drop shape:", input_embeddings_after_drop.shape)
 
+        input_ids = self.tokenizer(y, max_length=self.max_length, truncation=True, padding='max_length', return_tensors="pt").input_ids.cuda()
+        text_embeddings = self.text_encoder(input_ids).last_hidden_state 
+        # text_embeddings = self.text_embed(y)
+        
         # apply Transformer blocks
         x = input_embeddings_after_drop
+        x = torch.cat([x, text_embeddings], dim=1)
+        # print("Encoder representation shape before:", x.shape)
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
-        # print("Encoder representation shape:", x.shape)
+        # print("Encoder representation shape after:", x.shape)
+        # print("TextEncoder representation shape:", text_embeddings.shape)
 
         return x, gt_indices, token_drop_mask, token_all_mask
 
     def forward_decoder(self, x, token_drop_mask, token_all_mask):
+        
+        # print(f'Decoder Input shape: {x.shape}')
         # embed tokens
+        x, y = x[:, :-self.max_length], x[:, self.max_length:]
+        x = self.cross_attention(x, y)
+        
         x = self.decoder_embed(x)
-
+        # print(f'Decoder Embed shape: {x.shape}')
         # append mask tokens to sequence
         if self.pad_with_cls_token:
             mask_tokens = x[:, 0:1].repeat(1, token_all_mask.shape[1], 1)
         else:
             mask_tokens = self.mask_token.repeat(token_all_mask.shape[0], token_all_mask.shape[1], 1)
+            
+        # print(f'Decoder Mask Token shape: {mask_tokens.shape}')
 
         # put undropped tokens into original sequence
         x_after_pad = mask_tokens.clone()
@@ -352,8 +420,10 @@ class MaskedGenerativeEncoderViT(nn.Module):
         loss = (loss * mask[:, 1:]).sum() / mask[:, 1:].sum()  # mean loss on removed patches
         return loss
 
-    def forward(self, imgs):
-        latent, gt_indices, token_drop_mask, token_all_mask = self.forward_encoder(imgs)
+    def forward(self, imgs, text):
+        # if dist.get_rank() == 0:
+        #     pdb.set_trace()
+        latent, gt_indices, token_drop_mask, token_all_mask = self.forward_encoder(imgs, text)
         logits = self.forward_decoder(latent, token_drop_mask, token_all_mask)
         loss = self.forward_loss(gt_indices, logits, token_all_mask)
         return loss, imgs, token_all_mask

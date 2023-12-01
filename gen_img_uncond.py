@@ -111,7 +111,7 @@ parser.add_argument('--output_dir', default='output_dir/fid/gen/mage-vitb', type
 
 args = parser.parse_args()
 
-vqgan_ckpt_path = 'vqgan_jax_strongaug.ckpt'
+vqgan_ckpt_path = 'checkpoint/vqgan_jax_strongaug.ckpt'
 
 model = models_mage.__dict__[args.model](norm_pix_loss=False,
                                          mask_ratio_mu=0.55, mask_ratio_std=0.25,

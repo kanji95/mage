@@ -5,9 +5,9 @@ channels:
 dependencies:
   - python=3.8.5
   - pip=20.3
-  - cudatoolkit=10.2
-  - pytorch=1.7.1
-  - torchvision=0.8.2
+  - cudatoolkit=11.8
+  - pytorch=2.1.1
+  - torchvision=0.16.1
   - numpy=1.19.2
   - pip:
     - albumentations==0.4.3

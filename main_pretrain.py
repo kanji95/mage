@@ -10,11 +10,13 @@ import torch
 import torch.backends.cudnn as cudnn
 from torch.utils.tensorboard import SummaryWriter
 import torchvision.transforms as transforms
-import torchvision.datasets as datasets
+# import torchvision.datasets as datasets
+
+from util.datasets import get_cc12m_dataset
 
 import timm
 
-assert timm.__version__ == "0.3.2"  # version check
+# assert timm.__version__ == "0.3.2"  # version check
 import timm.optim.optim_factory as optim_factory
 
 import util.misc as misc
@@ -67,8 +69,10 @@ def get_args_parser():
                         help='Gradient clip')
 
     # Dataset parameters
-    parser.add_argument('--data_path', default='./data/imagenet', type=str,
+    parser.add_argument('--data_path', default='/network/scratch/k/kanishk.jain/datasets/cc12m/cc12m', type=str,
                         help='dataset path')
+    parser.add_argument('--metadata_path', default='/network/scratch/k/kanishk.jain/datasets/cc12m/cc12m.npy', type=str,
+                        help='metadataset path')
 
     parser.add_argument('--output_dir', default='./output_dir',
                         help='path where to save, empty for no saving')
@@ -91,7 +95,7 @@ def get_args_parser():
     # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
-    parser.add_argument('--local_rank', default=-1, type=int)
+    parser.add_argument('--local-rank', default=-1, type=int)
     parser.add_argument('--dist_on_itp', action='store_true')
     parser.add_argument('--dist_url', default='env://',
                         help='url used to set up distributed training')
@@ -119,7 +123,8 @@ def main(args):
             transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0)),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor()])
-    dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
+    # dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
+    dataset_train = get_cc12m_dataset(args.data_path, args.metadata_path)
     print(dataset_train)
 
     if True:  # args.distributed:
@@ -147,7 +152,7 @@ def main(args):
     )
     
     # define the model
-    vqgan_ckpt_path = 'vqgan_jax_strongaug.ckpt'
+    vqgan_ckpt_path = './checkpoint/vqgan_jax_strongaug.ckpt'
 
     model = models_mage.__dict__[args.model](mask_ratio_mu=args.mask_ratio_mu, mask_ratio_std=args.mask_ratio_std,
                                              mask_ratio_min=args.mask_ratio_min, mask_ratio_max=args.mask_ratio_max,

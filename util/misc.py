@@ -7,7 +7,8 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
-from torch._six import inf
+# from torch._six import inf
+from torch import inf
 
 
 class SmoothedValue(object):
@@ -235,7 +236,6 @@ def init_distributed_mode(args):
                                          world_size=args.world_size, rank=args.rank)
     torch.distributed.barrier()
     setup_for_distributed(args.rank == 0)
-
 
 class NativeScalerWithGradNormCount:
     state_dict_key = "amp_scaler"

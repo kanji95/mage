@@ -54,19 +54,7 @@ to download the pre-trained VQGAN tokenzier and put it in the mage directory.
 
 To pre-train a MAGE ViT-B model with 4096 batch size using 8 servers with 8 V100 GPUs per server:
 ```
-python -m torch.distributed.launch --node_rank=0 --nproc_per_node=8 --nnodes=8 \
---master_addr="${MASTER_SERVER_ADDRESS}" --master_port=12344 \
-main_pretrain.py \
---batch_size 64 \
---model mage_vit_base_patch16 \
---mask_ratio_min 0.5 --mask_ratio_max 1.0 \
---mask_ratio_mu 0.55 --mask_ratio_std 0.25 \
---epochs 1600 \
---warmup_epochs 40 \
---blr 1.5e-4 --weight_decay 0.05 \
---output_dir ${OUTPUT_DIR} \
---data_path ${IMAGENET_DIR} \
---dist_url tcp://${MASTER_SERVER_ADDRESS}:2214
+python -m torch.distributed.launch --node_rank=0 --nproc_per_node=4 --nnodes=1 --master_addr="${MASTER_ADDR}" --master_port=${MASTER_PORT} main_pretrain.py --batch_size 32 --model mage_vit_base_patch16 --mask_ratio_min 0.5 --mask_ratio_max 1.0 --mask_ratio_mu 0.55 --mask_ratio_std 0.25 --epochs 1600 --warmup_epochs 40 --blr 1.5e-4 --weight_decay 0.05 --output_dir /network/scratch/k/kanishk.jain/mage --data_path /network/projects/aishwarya_lab/datasets/imagenet --dist_url tcp://${MASTER_ADDR}:${MASTER_PORT}
 ```
 
 The following table provides the performance and weights of the
